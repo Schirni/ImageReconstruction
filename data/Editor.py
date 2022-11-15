@@ -146,3 +146,20 @@ class LoadGregorContinuumEditor(Editor):
         continuum = sorted(continuum, key=lambda hdu: hdu.header['TIMEOFFS'])
         gregor_maps = [Map(hdu.data, primary_header) for hdu in continuum]
         return gregor_maps, {'path': file}
+
+    
+    
+class PaddingEditor(Editor):
+    def __init__(self, target_shape):
+        self.target_shape = target_shape
+
+    def call(self, data, **kwargs):
+        s = data.shape
+        p = self.target_shape
+        x_pad = (p[0] - s[-2]) / 2
+        y_pad = (p[1] - s[-1]) / 2
+        pad = [(int(np.floor(x_pad)), int(np.ceil(x_pad))),
+               (int(np.floor(y_pad)), int(np.ceil(y_pad)))]
+        if len(s) == 3:
+            pad.insert(0, (0, 0))
+        return np.pad(data, pad, 'constant', constant_values=np.nan)
