@@ -163,3 +163,22 @@ class PaddingEditor(Editor):
         if len(s) == 3:
             pad.insert(0, (0, 0))
         return np.pad(data, pad, 'constant', constant_values=np.nan)
+
+    
+    
+class UnpaddingEditor(Editor):
+    def __init__(self, target_shape):
+        self.target_shape = target_shape
+
+    def call(self, data, **kwargs):
+        s = data.shape
+        p = self.target_shape
+        x_unpad = (s[-2] - p[0]) / 2
+        y_unpad = (s[-1] - p[1]) / 2
+        #
+        unpad = [None if int(np.floor(y_unpad)) == 0 else int(np.floor(y_unpad)),
+                 None if int(np.ceil(y_unpad)) == 0 else int(np.ceil(y_unpad)),
+                 (None if int(np.floor(x_unpad)) == 0 else int(np.floor(x_unpad)),
+                  None if int(np.ceil(x_unpad)) == 0 else int(np.ceil(x_unpad)))]
+        data = data[:, unpad[0][0]:unpad[0][1], unpad[1][0]:unpad[1][1]]
+        return data
