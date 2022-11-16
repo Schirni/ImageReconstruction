@@ -86,7 +86,7 @@ class GregorDatasetGBand(BaseDataset):
         norm = gregor_norms_gband['gband']
         sub_editors = [MapToDataEditor(),
                        NanEditor(),
-                       NormalizeEditor(),
+                       NormalizeEditor(norm),
                        ExpandDimsEditor()]
         editors = [LoadGregorGBandEditor(), DistributeEditor(sub_editors)]
 
@@ -99,7 +99,7 @@ class GregorDatasetContinuum(BaseDataset):
         norm = gregor_norms_continuum['continuum']
         sub_editors = [MapToDataEditor(),
                        NanEditor(),
-                       NormalizeEditor(),
+                       NormalizeEditor(norm),
                        ExpandDimsEditor()]
         editors = [LoadGregorContinuumEditor(), DistributeEditor(sub_editors)]
 
