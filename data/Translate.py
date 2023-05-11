@@ -1,4 +1,5 @@
 import os
+import skimage
 from multiprocessing.pool import Pool
 from pathlib import Path
 from typing import List, Tuple
@@ -7,11 +8,15 @@ from urllib import request
 import astropy.units as u
 import numpy as np
 import torch
-from skimage.util import view_as_blocks
+#from skimage.util import view_as_blocks
 from sunpy.map import Map, make_fitswcs_header, all_coordinates_from_map
 
-from data.Dataset import GregorDatasetGBand, GregorDatasetContinuum
-from data.Editor import PaddingEditor, UnpaddingEditor
+from Dataset import GregorDatasetGBandLevel1_5, GregorDatasetContinuumLevel1_new, GregorDatasetGBandLevel1, \
+    GregorDatasetGBandLevel1_10, GregorDatasetGBandLevel1_25, GregorDatasetGBandLevel1_50, GregorDatasetGBandLevel1_75, \
+    GregorDatasetContinuumLevel1
+from Editor import PaddingEditor, UnpaddingEditor, gregor_norms_gband
+import matplotlib.pyplot as plt
+import time
 
 
 class ImageToImage:
@@ -37,13 +42,17 @@ class ImageToImage:
         with Pool(self.n_workers) as pool:
             for img, kwargs in pool.imap(dataset.convertData, dataset.data):
                 #
-                original_shape = img.shape
+                original_shape = img.shape # (channels, height, width)
                 img = np.array(img.data)
                 #
-                min_dim = min(
-                    [i for i in range(img.shape[1], img.shape[1] * 2 ** (self.depth_generator * self.patch_factor))
-                     if i % 2 ** (self.depth_generator + self.patch_factor) == 0]) # find min dim
-                target_shape = (min_dim, min_dim)
+                min_dim_x = min(
+                    [i for i in range(img.shape[1], img.shape[1] * 2 ** (self.depth_generator + self.patch_factor))
+                     if i % 2 ** (self.depth_generator + self.patch_factor) == 0])  # find min dim
+
+                min_dim_y = min(
+                    [i for i in range(img.shape[2], img.shape[2] * 2 ** (self.depth_generator + self.patch_factor))
+                     if i % 2 ** (self.depth_generator + self.patch_factor) == 0]) # find min dim_x
+                target_shape = (min_dim_x, min_dim_y)
                 padding_editor = PaddingEditor(target_shape)
                 # Pad
                 padded_img = padding_editor.call(img)
@@ -52,28 +61,38 @@ class ImageToImage:
                 with torch.no_grad():
                     if self.patch_factor > 0:
                         iti_img = self._translateBlocks(padded_img, self.patch_factor)
+
                     else:
+                        st = time.time()
                         iti_img = self.generator(torch.tensor(padded_img).float().to(self.device).unsqueeze(0))
                         iti_img = iti_img[0].detach().cpu().numpy()
+                        en = time.time()
+                        translate_time = timer(st, en)
+                print("Translation Time: ", translate_time)
                 # Unpad
                 scaling = iti_img.shape[-1] / padded_img.shape[-1]
                 iti_img = UnpaddingEditor([p * scaling for p in original_shape[1:]]).call(iti_img)
                 #
-                ref_meta = [k['header'] for k in kwargs['kwargs_list']] if 'kwargs_list' in kwargs else [
-                    kwargs['header']]
+                #ref_meta = [k['header'] for k in kwargs['kwargs_list']] if 'kwargs_list' in kwargs else [
+                #    kwargs['header']]
+                path = kwargs
                 # use last meta data as reference for additional observables
-                ref_meta += [ref_meta[-1]] * (len(iti_img) - len(ref_meta))
+                #ref_meta += [ref_meta[-1]] * (len(iti_img) - len(ref_meta))
                 #
-                ref_img = img.tolist()
-                ref_img += [ref_img[-1]] * (len(iti_img) - len(ref_img)) #extend list
+                #ref_img = img.tolist()
+                #ref_img += [ref_img[-1]] * (len(iti_img) - len(ref_img)) #extend list
+                #ref_img = np.array(ref_img)
                 #
                 # create meta for additional channels
-                maps = [Map(d, self._createMeta(d, ref_d, meta)) for d, ref_d, meta in zip(iti_img, ref_img, ref_meta)]
-                maps = maps[0] if len(maps) == 1 else maps
-                yield maps, img, iti_img
+                #maps = [Map(d, self._createMeta(d, ref_d, meta)) for d, ref_d, meta in zip(iti_img, ref_img, ref_meta)]
+                #maps = maps[0] if len(maps) == 1 else maps
+                #yield maps, img, iti_img
+                yield path, img, iti_img
+
 
     def _createMeta(self, data, ref_data, ref_meta):
-        scaling = data.shape[0] / ref_data.shape[0]
+        #scaling = data.shape[0] / ref_data.shape[0]
+        scaling = 1
         ref_map = Map(ref_data, ref_meta) # copy observer
         scale = (ref_meta['cdelt1'] / scaling, ref_meta['cdelt2'] / scaling)
         coord = ref_map.reference_coordinate
@@ -83,30 +102,30 @@ class ImageToImage:
                                    exposure=1 * u.s, )
         return meta
 
-    def _translateBlocks(self, img, n_patches):
-        patch_dim = img.shape[-1] // n_patches
+    #def _translateBlocks(self, img, n_patches):
+    #    patch_dim = img.shape[-1] // n_patches
+    #    #
+    #    patch_shape = (img.shape[0], patch_dim, patch_dim)
+    #    patches = view_as_blocks(img, patch_shape)
+    #    patches = np.reshape(patches, (-1, *patch_shape))
+    #    iti_patches = []
+    #    with torch.no_grad():
+    #        for patch in patches:
+    #            iti_patch = self.generator(torch.tensor(patch).float().to(self.device).unsqueeze(0))
+    #            iti_patches.append(iti_patch[0].detach().numpy())
         #
-        patch_shape = (img.shape[0], patch_dim, patch_dim)
-        patches = view_as_blocks(img, patch_shape)
-        patches = np.reshape(patches, (-1, *patch_shape))
-        iti_patches = []
-        with torch.no_grad():
-            for patch in patches:
-                iti_patch = self.generator(torch.tensor(patch).float().to(self.device).unsqueeze(0))
-                iti_patches.append(iti_patch[0].detach().numpy())
+    #    iti_patches = np.array(iti_patches)
+    #    iti_patches = iti_patches.reshape((n_patches, n_patches,
+    #                                      iti_patches.shape[1], iti_patches.shape[2], iti_patches.shape[3]))
+    #    iti_img = np.moveaxis(iti_patches, [0, 1], [1, 3]).reshape((iti_patches.shape[2],
+    #                                                                iti_patches.shape[0] * iti_patches.shape[3],
+    #                                                                iti_patches.shape[1] * iti_patches.shape[4]))
         #
-        iti_patches = np.array(iti_patches)
-        iti_patches = iti_patches.reshape((n_patches, n_patches,
-                                          iti_patches.shape[1], iti_patches.shape[2], iti_patches.shape[3]))
-        iti_img = np.moveaxis(iti_patches, [0, 1], [1, 3]).reshape((iti_patches.shape[2],
-                                                                    iti_patches.shape[0] * iti_patches.shape[3],
-                                                                    iti_patches.shape[1] * iti_patches.shape[4]))
-        #
-        return iti_img
+    #    return iti_img
 
     def _getModelPath(self, model_name):
-        model_path = os.path.join(Path.home(), '.iti', model_name)
-        os.makedirs(os.path.join(Path.home(), '.iti'), exist_ok=True)
+        model_path = os.path.join(Path.home(), 'iti', model_name)
+        os.makedirs(os.path.join(Path.home(), 'iti'), exist_ok=True)
         return model_path
 
     def _adjustMeta(self, meta, new_data, scale_factor):
@@ -136,27 +155,38 @@ class ImageToImage:
 
 
 class GREGORLowToHighGBand(ImageToImage):
-    def __init__(self, model_name='gregor_low_to_high_gband.pt', resolution=2160, **kwargs):
+    def __init__(self, model_name='generator_AB_test_220k.pt', **kwargs):
         super().__init__(model_name, **kwargs)
-        self.resolution = resolution
 
     def translate(self, paths, return_arrays=False, **kwargs):
-        ds = GregorDatasetGBand(paths, self.resolution, **kwargs)
-        for result, inputs, outputs in self._translateDataset(ds):
+        ds = GregorDatasetGBandLevel1(paths)
+        #for smap, inputs, outputs in self._translateDataset(ds):
+        for path, inputs, outputs in self._translateDataset(ds):
             if return_arrays:
-                yield result, inputs, outputs
+                #yield smap inputs, outputs
+                yield path, inputs, outputs
             else:
-                yield result
+                #yield smap
+                pass
+
 
 class GREGORLowToHighContinuum(ImageToImage):
-    def __init__(self, model_name='gregor_low_to_high_continuum.pt', resolution=2160, **kwargs):
+    def __init__(self, model_name='generator_AB_continuum_v1_280k.pt', **kwargs):
         super().__init__(model_name, **kwargs)
-        self.resolution = resolution
 
     def translate(self, paths, return_arrays=False, **kwargs):
-        ds = GregorDatasetContinuum(paths, self.resolution, **kwargs)
-        for result, inputs, outputs in self._translateDataset(ds):
+        ds = GregorDatasetContinuumLevel1(paths)
+        #for smap, inputs, outputs in self._translateDataset(ds):
+        for path, inputs, outputs in self._translateDataset(ds):
             if return_arrays:
-                yield result, inputs, outputs
+                #yield smap, inputs, outputs
+                yield path, inputs, outputs
             else:
-                yield result
+                #yield smap
+                pass
+
+
+def timer(start, end):
+
+    calc_time = end - start
+    return calc_time
